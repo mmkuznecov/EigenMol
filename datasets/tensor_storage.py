@@ -17,13 +17,15 @@ class TensorStorage:
     Provides mapping between tensor indices and additional metadata parameters.
     """
 
-    def __init__(self, storage_dir: str, description: str = ""):
+    def __init__(self, storage_dir: str, description: str = "", chunk_size: Optional[int] = None):
         """
         Initialize the TensorStorage.
 
         Args:
             storage_dir (str): Directory where the storage will be created or loaded from.
             description (str): Optional description of the storage
+            chunk_size (Optional[int]): Size of each chunk in bytes. If None, will be loaded from metadata
+                                      or set to default value.
         """
         self.storage_dir = storage_dir
         self.description = description
@@ -31,18 +33,20 @@ class TensorStorage:
         self.metadata_dir = os.path.join(storage_dir, "metadata")
         self.metadata_file = os.path.join(self.metadata_dir, "metadata.json")
         self.parquet_file = os.path.join(self.metadata_dir, "tensor_metadata.parquet")
-
+        
         # Create directories if they don't exist
         os.makedirs(self.chunks_dir, exist_ok=True)
         os.makedirs(self.metadata_dir, exist_ok=True)
-
+        
         self.metadata = self._load_metadata()
-        self.chunk_size = self.metadata.get(
-            "chunk_size", 3 * 2**20 * np.dtype(np.float32).itemsize
-        )
+        
+        # Set chunk size with priority: provided > metadata > default
+        default_chunk_size = 3 * 2**20 * np.dtype(np.float32).itemsize
+        self.chunk_size = chunk_size or self.metadata.get("chunk_size", default_chunk_size)
+        
         self.loaded_chunks = {}
         self.current_window = []
-
+        
         # Load parquet metadata if exists
         self._load_parquet_metadata()
 
@@ -252,7 +256,7 @@ class TensorStorage:
         storage_dir: str,
         data_iterator: Iterator[np.ndarray],
         metadata_iterator: Iterator[Dict[str, Any]],
-        chunk_size: int = 3 * 2**20 * np.dtype(np.float32).itemsize,
+        chunk_size: Optional[int] = None,
         description: str = "",
     ) -> "TensorStorage":
         """
@@ -270,9 +274,8 @@ class TensorStorage:
         """
         os.makedirs(os.path.join(storage_dir, "chunks"), exist_ok=True)
         os.makedirs(os.path.join(storage_dir, "metadata"), exist_ok=True)
-
-        storage = TensorStorage(storage_dir, description)
-        storage.chunk_size = chunk_size
+        
+        storage = TensorStorage(storage_dir, description, chunk_size)
 
         logging.info(f"Creating storage in directory: {storage_dir}")
         logging.info(f"Chunk size: {storage.chunk_size / (1024 * 1024):.2f} MB")
