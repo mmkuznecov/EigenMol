@@ -68,8 +68,8 @@ def save_to_parquet(molecules, output_path):
 def main():
 
     # Example usage:
-    smi_file = "datasets/dgsm/chembl_22_clean_1576904_sorted_std_final.smi"
-    parquet_file = "datasets/dgsm/chembl_22_clean_1576904_sorted_std_final.parquet"
+    smi_file = "data/dgsm/chembl_22_clean_1576904_sorted_std_final.smi"
+    parquet_file = "data/dgsm/chembl_22_clean_1576904_sorted_std_final.parquet"
 
     try:
         # Read molecules
