@@ -1,3 +1,4 @@
 data/
 storages/
 __pycache__/
+chroma_*

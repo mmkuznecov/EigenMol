@@ -1,6 +1,6 @@
 import os
 import numpy as np
-from typing import List, Iterator, Dict, Any, Optional
+from typing import List, Iterator, Dict, Any, Optional, Union, Tuple
 import json
 import logging
 from tqdm import tqdm
@@ -17,8 +17,49 @@ class TensorStorage:
     Provides mapping between tensor indices and additional metadata parameters.
     """
 
+    # def __init__(
+    #     self, storage_dir: str, description: str = "", chunk_size: Optional[int] = None
+    # ):
+    #     """
+    #     Initialize the TensorStorage.
+
+    #     Args:
+    #         storage_dir (str): Directory where the storage will be created or loaded from.
+    #         description (str): Optional description of the storage
+    #         chunk_size (Optional[int]): Size of each chunk in bytes. If None, will be loaded from metadata
+    #                                   or set to default value.
+    #     """
+    #     self.storage_dir = storage_dir
+    #     self.description = description
+    #     self.chunks_dir = os.path.join(storage_dir, "chunks")
+    #     self.metadata_dir = os.path.join(storage_dir, "metadata")
+    #     self.metadata_file = os.path.join(self.metadata_dir, "metadata.json")
+    #     self.parquet_file = os.path.join(self.metadata_dir, "tensor_metadata.parquet")
+
+    #     # Create directories if they don't exist
+    #     os.makedirs(self.chunks_dir, exist_ok=True)
+    #     os.makedirs(self.metadata_dir, exist_ok=True)
+
+    #     self.metadata = self._load_metadata()
+
+    #     # Set chunk size with priority: provided > metadata > default
+    #     default_chunk_size = 3 * 2**20 * np.dtype(np.float32).itemsize
+    #     self.chunk_size = chunk_size or self.metadata.get(
+    #         "chunk_size", default_chunk_size
+    #     )
+
+    #     self.loaded_chunks = {}
+    #     self.current_window = []
+
+    #     # Load parquet metadata if exists
+    #     self._load_parquet_metadata()
+    
     def __init__(
-        self, storage_dir: str, description: str = "", chunk_size: Optional[int] = None
+        self, 
+        storage_dir: str, 
+        description: str = "", 
+        chunk_size: Optional[int] = None,
+        return_metadata: bool = False
     ):
         """
         Initialize the TensorStorage.
@@ -28,31 +69,31 @@ class TensorStorage:
             description (str): Optional description of the storage
             chunk_size (Optional[int]): Size of each chunk in bytes. If None, will be loaded from metadata
                                       or set to default value.
+            return_metadata (bool): If True, __getitem__ will return (tensor, metadata) pairs
         """
         self.storage_dir = storage_dir
         self.description = description
+        self.return_metadata = return_metadata
         self.chunks_dir = os.path.join(storage_dir, "chunks")
         self.metadata_dir = os.path.join(storage_dir, "metadata")
         self.metadata_file = os.path.join(self.metadata_dir, "metadata.json")
         self.parquet_file = os.path.join(self.metadata_dir, "tensor_metadata.parquet")
-
+        
         # Create directories if they don't exist
         os.makedirs(self.chunks_dir, exist_ok=True)
         os.makedirs(self.metadata_dir, exist_ok=True)
-
+        
         self.metadata = self._load_metadata()
-
+        
         # Set chunk size with priority: provided > metadata > default
         default_chunk_size = 3 * 2**20 * np.dtype(np.float32).itemsize
-        self.chunk_size = chunk_size or self.metadata.get(
-            "chunk_size", default_chunk_size
-        )
-
+        self.chunk_size = chunk_size or self.metadata.get("chunk_size", default_chunk_size)
+        
         self.loaded_chunks = {}
         self.current_window = []
-
-        # Load parquet metadata if exists
-        self._load_parquet_metadata()
+        
+        # Load parquet metadata
+        self.metadata_df = self.load_metadata_table()
 
     def _load_parquet_metadata(self):
         """Load the parquet metadata if it exists."""
@@ -114,7 +155,37 @@ class TensorStorage:
                 self._load_chunk(chunk_id)
         self.current_window = list(new_window)
 
-    def __getitem__(self, idx: int) -> np.ndarray:
+    # def __getitem__(self, idx: int) -> np.ndarray:
+    #     """
+    #     Retrieve a tensor from storage by its index.
+
+    #     Args:
+    #         idx (int): Index of the tensor to retrieve.
+
+    #     Returns:
+    #         np.ndarray: The retrieved tensor.
+
+    #     Raises:
+    #         IndexError: If the index is not found in storage.
+    #     """
+    #     if str(idx) not in self.metadata["elements"]:
+    #         raise IndexError(f"Index {idx} not found in storage")
+
+    #     item_meta = self.metadata["elements"][str(idx)]
+    #     chunks_info = item_meta["chunks"]
+    #     shape = item_meta["shape"]
+
+    #     needed_chunks = [chunk_info[0] for chunk_info in chunks_info]
+    #     self._update_window(needed_chunks)
+
+    #     data = []
+    #     for chunk_id, start_idx, end_idx in chunks_info:
+    #         chunk_data = self._load_chunk(chunk_id)[start_idx:end_idx]
+    #         data.append(chunk_data)
+
+    #     return np.concatenate(data).reshape(shape)
+    
+    def __getitem__(self, idx: int) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, Any]]]:
         """
         Retrieve a tensor from storage by its index.
 
@@ -122,7 +193,9 @@ class TensorStorage:
             idx (int): Index of the tensor to retrieve.
 
         Returns:
-            np.ndarray: The retrieved tensor.
+            Union[np.ndarray, Tuple[np.ndarray, Dict[str, Any]]]: 
+                If return_metadata is False: just the tensor
+                If return_metadata is True: tuple of (tensor, metadata_dict)
 
         Raises:
             IndexError: If the index is not found in storage.
@@ -142,7 +215,18 @@ class TensorStorage:
             chunk_data = self._load_chunk(chunk_id)[start_idx:end_idx]
             data.append(chunk_data)
 
-        return np.concatenate(data).reshape(shape)
+        tensor = np.concatenate(data).reshape(shape)
+        
+        if not self.return_metadata:
+            return tensor
+            
+        # Get metadata if requested
+        if self.metadata_df is not None and not self.metadata_df.empty:
+            metadata = self.metadata_df[self.metadata_df['tensor_idx'] == idx].iloc[0].to_dict()
+        else:
+            metadata = {}
+            
+        return tensor, metadata
 
     def __len__(self):
         """Return the number of tensors in the storage."""
@@ -169,6 +253,17 @@ class TensorStorage:
             info.append(f"Tensor shape: {first_tensor_meta['shape']}")
 
         return "\n".join(info)
+    
+    def load_metadata_table(self) -> Optional[pd.DataFrame]:
+        """
+        Load the metadata table from parquet file.
+        
+        Returns:
+            Optional[pd.DataFrame]: DataFrame with metadata or None if file doesn't exist
+        """
+        if os.path.exists(self.parquet_file):
+            return pd.read_parquet(self.parquet_file)
+        return None
 
     def get_storage_info(self) -> Dict[str, Any]:
         """Get detailed information about the storage."""
