@@ -53,13 +53,13 @@ class TensorStorage:
 
     #     # Load parquet metadata if exists
     #     self._load_parquet_metadata()
-    
+
     def __init__(
-        self, 
-        storage_dir: str, 
-        description: str = "", 
+        self,
+        storage_dir: str,
+        description: str = "",
         chunk_size: Optional[int] = None,
-        return_metadata: bool = False
+        return_metadata: bool = False,
     ):
         """
         Initialize the TensorStorage.
@@ -78,20 +78,22 @@ class TensorStorage:
         self.metadata_dir = os.path.join(storage_dir, "metadata")
         self.metadata_file = os.path.join(self.metadata_dir, "metadata.json")
         self.parquet_file = os.path.join(self.metadata_dir, "tensor_metadata.parquet")
-        
+
         # Create directories if they don't exist
         os.makedirs(self.chunks_dir, exist_ok=True)
         os.makedirs(self.metadata_dir, exist_ok=True)
-        
+
         self.metadata = self._load_metadata()
-        
+
         # Set chunk size with priority: provided > metadata > default
         default_chunk_size = 3 * 2**20 * np.dtype(np.float32).itemsize
-        self.chunk_size = chunk_size or self.metadata.get("chunk_size", default_chunk_size)
-        
+        self.chunk_size = chunk_size or self.metadata.get(
+            "chunk_size", default_chunk_size
+        )
+
         self.loaded_chunks = {}
         self.current_window = []
-        
+
         # Load parquet metadata
         self.metadata_df = self.load_metadata_table()
 
@@ -184,8 +186,10 @@ class TensorStorage:
     #         data.append(chunk_data)
 
     #     return np.concatenate(data).reshape(shape)
-    
-    def __getitem__(self, idx: int) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, Any]]]:
+
+    def __getitem__(
+        self, idx: int
+    ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, Any]]]:
         """
         Retrieve a tensor from storage by its index.
 
@@ -193,7 +197,7 @@ class TensorStorage:
             idx (int): Index of the tensor to retrieve.
 
         Returns:
-            Union[np.ndarray, Tuple[np.ndarray, Dict[str, Any]]]: 
+            Union[np.ndarray, Tuple[np.ndarray, Dict[str, Any]]]:
                 If return_metadata is False: just the tensor
                 If return_metadata is True: tuple of (tensor, metadata_dict)
 
@@ -216,16 +220,20 @@ class TensorStorage:
             data.append(chunk_data)
 
         tensor = np.concatenate(data).reshape(shape)
-        
+
         if not self.return_metadata:
             return tensor
-            
+
         # Get metadata if requested
         if self.metadata_df is not None and not self.metadata_df.empty:
-            metadata = self.metadata_df[self.metadata_df['tensor_idx'] == idx].iloc[0].to_dict()
+            metadata = (
+                self.metadata_df[self.metadata_df["tensor_idx"] == idx]
+                .iloc[0]
+                .to_dict()
+            )
         else:
             metadata = {}
-            
+
         return tensor, metadata
 
     def __len__(self):
@@ -253,11 +261,11 @@ class TensorStorage:
             info.append(f"Tensor shape: {first_tensor_meta['shape']}")
 
         return "\n".join(info)
-    
+
     def load_metadata_table(self) -> Optional[pd.DataFrame]:
         """
         Load the metadata table from parquet file.
-        
+
         Returns:
             Optional[pd.DataFrame]: DataFrame with metadata or None if file doesn't exist
         """
