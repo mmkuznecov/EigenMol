@@ -3,13 +3,12 @@ import os
 import torch
 import psutil
 import time
-from pathlib import Path
 from typing import Iterator, Dict, Any, Optional, Tuple, List
 from tqdm import tqdm
 import pandas as pd
 import numpy as np
-from models.molformer.molformer_encoder import MolformerEncoder
-from datasets.tensor_storage import TensorStorage
+from src.models.molformer.molformer_encoder import MolformerEncoder
+from src.datasets.tensor_storage import TensorStorage
 import gc
 
 # Configure detailed logging
@@ -61,7 +60,6 @@ class BatchProcessor:
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         # Process batch
-        # with torch.cuda.amp.autocast():  # Use automatic mixed precision
         with torch.no_grad():
             outputs = self.encoder.model(**inputs)
 
@@ -86,11 +84,12 @@ def create_efficient_iterators(
     df: pd.DataFrame,
     batch_processor: BatchProcessor,
     batch_size: int,
-) -> Tuple[Iterator[np.ndarray], Iterator[Dict[str, Any]]]:
+) -> Tuple[Iterator[np.ndarray], Iterator[Dict[str, Any]], List]:
     """Create efficient iterators with shared batch processing"""
 
     total_batches = (len(df) + batch_size - 1) // batch_size
     processed_batches = {}  # Cache for processed batches
+    progress_bar = tqdm(total=total_batches, desc="Processing batches", position=0)
 
     def process_and_cache_batch(batch_idx: int) -> Tuple[np.ndarray, List[bool]]:
         if batch_idx not in processed_batches:
@@ -102,11 +101,13 @@ def create_efficient_iterators(
             embeddings, success_flags = batch_processor.process_batch(batch_smiles)
             end_time = time.time()
 
-            logging.info(
-                f"Batch {batch_idx + 1}/{total_batches} - "
-                f"Time: {end_time - start_time:.2f}s - "
-                f"Success: {sum(success_flags)}/{len(success_flags)}"
+            progress_bar.set_postfix(
+                {
+                    "Time": f"{end_time - start_time:.2f}s",
+                    "Success": f"{sum(success_flags)}/{len(success_flags)}",
+                }
             )
+            progress_bar.update(1)
 
             processed_batches[batch_idx] = (embeddings, success_flags)
 
@@ -126,36 +127,35 @@ def create_efficient_iterators(
             _, success_flags = process_and_cache_batch(batch_idx)
 
             for j, (smiles, success) in enumerate(zip(batch_smiles, success_flags)):
-                metadata = {
+                yield {
                     "smiles": smiles,
                     "success": success,
                     "index": start_idx + j,
                     "batch_id": batch_idx,
-                    "processing_time": time.time(),  # Add timestamp
+                    "processing_time": time.time(),
                 }
 
-                # Add subdir for tetrapeptides if present
-                if "subdir" in df.columns:
-                    metadata["subdir"] = df.iloc[start_idx + j]["subdir"]
-
-                yield metadata
-
-    return tensor_iterator(), metadata_iterator()
+    return tensor_iterator(), metadata_iterator(), [progress_bar]
 
 
-def process_peptide_embeddings(
+def close_progress_bars(progress_bars):
+    """Safely close all progress bars"""
+    for bar in progress_bars:
+        bar.close()
+
+
+def process_and_store_embeddings(
     parquet_path: str,
     storage_dir: str,
-    peptide_type: str,
-    batch_size: int = 32,
+    batch_size: int = 256,
     chunk_size: Optional[int] = None,
 ) -> TensorStorage:
-    """Process embeddings with enhanced monitoring"""
+    """Process SMILES strings and store embeddings with enhanced monitoring"""
 
     # Load data
     logging.info(f"Reading parquet file: {parquet_path}")
     df = pd.read_parquet(parquet_path)
-    logging.info(f"Loaded {len(df)} {peptide_type} SMILES strings")
+    logging.info(f"Loaded {len(df)} SMILES strings")
 
     # Initialize processor
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -174,7 +174,7 @@ def process_peptide_embeddings(
     chunk_size = chunk_size or 768 * (2**13)
 
     # Create iterators
-    tensor_iter, metadata_iter = create_efficient_iterators(
+    tensor_iter, metadata_iter, progress_bars = create_efficient_iterators(
         df, batch_processor, batch_size
     )
 
@@ -182,12 +182,19 @@ def process_peptide_embeddings(
     logging.info("Creating tensor storage...")
     start_time = time.time()
 
+    # Create progress bar for storage creation
+    storage_progress = tqdm(total=len(df), desc="Creating storage", position=1)
+    progress_bars.append(storage_progress)
+
+    def progress_callback(current, total):
+        storage_progress.update(current - storage_progress.n)
+
     storage = TensorStorage.create_storage(
         storage_dir=storage_dir,
         data_iterator=tensor_iter,
         metadata_iterator=metadata_iter,
         chunk_size=chunk_size,
-        description=f"MolFormer {peptide_type} embeddings",
+        description="MolFormer DGSM embeddings",
     )
 
     end_time = time.time()
@@ -197,23 +204,22 @@ def process_peptide_embeddings(
     success_count = storage.metadata_df["success"].sum()
     total_count = len(storage.metadata_df)
 
-    logging.info(f"\n{peptide_type} Statistics:")
+    logging.info(f"\nDGSM Statistics:")
     logging.info(f"Total molecules: {total_count}")
     logging.info(f"Successful embeddings: {success_count}")
     logging.info(f"Failed embeddings: {total_count - success_count}")
     logging.info(f"Success rate: {success_count/total_count:.2%}")
 
-    if "subdir" in storage.metadata_df.columns:
-        subdirs = storage.metadata_df["subdir"].unique()
-        logging.info(f"Unique subdirs: {len(subdirs)}")
-
     GPUMonitor.log_gpu_stats()
+
+    # Close progress bars
+    close_progress_bars(progress_bars)
     return storage
 
 
-def verify_storage(storage: TensorStorage, peptide_type: str):
+def verify_storage(storage: TensorStorage):
     """Verify storage with detailed checking"""
-    logging.info(f"\nVerifying {peptide_type} storage...")
+    logging.info("\nVerifying DGSM storage...")
 
     # Check tensor shapes and types
     success_indices = storage.filter_tensors(success=True)
@@ -242,15 +248,10 @@ def verify_storage(storage: TensorStorage, peptide_type: str):
 
 def main():
     """Main execution with enhanced monitoring"""
-    BASE_DIR = Path("data/peptides")
-    STORAGE_BASE = Path("storages")
-    BATCH_SIZE = 256
-
-    peptide_configs = [
-        ("dipeptides", "dipeptides.parquet", "molformer_dipeptides"),
-        ("tripeptides", "tripeptides.parquet", "molformer_tripeptides"),
-        ("tetrapeptides", "tetrapeptides.parquet", "molformer_tetrapeptides"),
-    ]
+    # Configuration
+    PARQUET_FILE = "data/dgsm/chembl_22_clean_1576904_sorted_std_final.parquet"
+    STORAGE_DIR = "storages/molformer_dgsm"
+    BATCH_SIZE = 256  # Adjust based on your GPU memory
 
     # Initial system status
     logging.info("\nSystem Configuration:")
@@ -260,32 +261,34 @@ def main():
     logging.info(f"Number of CPUs: {psutil.cpu_count()}")
     logging.info(f"Total RAM: {psutil.virtual_memory().total / (1024**3):.1f}GB")
 
-    for peptide_type, parquet_file, storage_name in peptide_configs:
-        start_time = time.time()
-        logging.info(f"\nProcessing {peptide_type}...")
+    start_time = time.time()
+    logging.info("\nProcessing DGSM dataset...")
 
-        parquet_path = BASE_DIR / peptide_type / parquet_file
-        storage_dir = STORAGE_BASE / storage_name
-
-        storage = process_peptide_embeddings(
-            parquet_path=str(parquet_path),
-            storage_dir=str(storage_dir),
-            peptide_type=peptide_type,
+    try:
+        # Process and store embeddings
+        storage = process_and_store_embeddings(
+            parquet_path=PARQUET_FILE,
+            storage_dir=STORAGE_DIR,
             batch_size=BATCH_SIZE,
         )
 
-        verify_storage(storage, peptide_type)
+        # Verify storage
+        verify_storage(storage)
+
+        # Close storage
         storage.close()
 
         end_time = time.time()
-        logging.info(
-            f"{peptide_type} total processing time: {end_time - start_time:.2f}s"
-        )
+        logging.info(f"Total processing time: {end_time - start_time:.2f}s")
 
-        # Clear GPU cache between peptide types
+        # Clear GPU cache
         GPUMonitor.clear_gpu_cache()
 
-    logging.info("\nAll peptides processed successfully!")
+        logging.info("\nProcessing completed successfully!")
+
+    except Exception as e:
+        logging.error(f"Error in main execution: {str(e)}")
+        raise
 
 
 if __name__ == "__main__":

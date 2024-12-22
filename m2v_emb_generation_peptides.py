@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import List, Optional
 import pandas as pd
 import numpy as np
-from models.mol2vec.mol2vec_encoder import Mol2VecEncoder
-from datasets.tensor_storage import TensorStorage
+from src.models.mol2vec.mol2vec_encoder import Mol2VecEncoder
+from src.datasets.tensor_storage import TensorStorage
 from rdkit import RDLogger
 
 RDLogger.DisableLog("rdApp.*")

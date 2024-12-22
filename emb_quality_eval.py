@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Union, Tuple, Iterator, Optional
 from sklearn.decomposition import IncrementalPCA
 from emb_quality import EmbeddingMetrics, BatchIterator
-from datasets.tensor_storage import TensorStorage
+from src.datasets.tensor_storage import TensorStorage
 
 # Configure logging
 logging.basicConfig(

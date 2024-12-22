@@ -5,8 +5,8 @@ import logging
 import warnings
 from typing import Iterator, Dict, Any, Optional, Tuple
 from tqdm import tqdm
-from models.mol2vec.mol2vec_encoder import Mol2VecEncoder
-from datasets.tensor_storage import TensorStorage
+from src.models.mol2vec.mol2vec_encoder import Mol2VecEncoder
+from src.datasets.tensor_storage import TensorStorage
 from rdkit import RDLogger
 
 # Suppress all RDKit logging
