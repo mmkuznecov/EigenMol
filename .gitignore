@@ -3,3 +3,4 @@ storages/
 __pycache__/
 chroma_*
 credentials/
+*.egg-info
